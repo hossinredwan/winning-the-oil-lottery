@@ -1,0 +1,65 @@
+# Winning the Oil Lottery
+
+### The Impact of Natural Resource Extraction on Growth
+
+**Replication of:**
+
+Cavalcanti, Da Mata & Toscani (2019)
+
+Journal of Economic Growth
+
+---
+
+# Outline
+
+1. Introduction
+2. Methodology & Data
+3. Empirical Model
+4. The Oil Lottery: A Quasi-Experiment
+5. Results
+6. Conclusion
+
+---
+
+# Introduction
+
+## Motivation
+
+- Natural resources can generate substantial economic wealth.
+- However, economists disagree on whether resource discoveries promote long-run development.
+- Previous studies often suffer from endogeneity because resource-rich regions may already differ systematically from other regions.
+- This paper exploits the random success of oil drilling in Brazil to estimate the causal effect of oil discoveries on local economic growth.
+
+---
+
+# Research Question
+
+## Main Research Question
+
+> What is the causal impact of oil discoveries on local economic growth?
+
+### Sub-questions
+
+- Do oil discoveries increase GDP per capita?
+- Do they accelerate structural transformation?
+- Which economic sectors benefit the most?
+- Are the effects driven by oil production itself or by broader economic mechanisms?
+
+---
+
+# Why This Paper?
+
+## Contributions
+
+- Uses a quasi-experimental research design.
+- Compares municipalities with successful and unsuccessful drilling.
+- Exploits more than 20,000 oil wells drilled in Brazil (1940–2000).
+- Provides evidence on whether natural resources are a blessing or a curse.
+
+---
+
+# Expected Contribution of This Replication
+
+- Reproduce the main empirical findings.
+- Reconstruct the original dataset using public sources where possible. data_download_checklist.md
+- Extend the analysis with GIS visualizations and spatial analysis.

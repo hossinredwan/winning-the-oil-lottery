@@ -1,0 +1,24 @@
+---
+title: "Winning the Oil Lottery"
+author: "MD Redwan Hossin"
+
+format:
+  pdf:
+    toc: true
+    number-sections: true
+
+execute:
+  echo: false
+---
+
+{{< include sections/01_introduction.qmd >}}
+
+{{< include sections/02_methodology.qmd >}}
+
+{{< include sections/03_empirical_model.qmd >}}
+
+{{< include sections/04_oil_lotetery.qmd >}}
+
+{{< include sections/05_results.qmd >}}
+
+{{< include sections/06_conclusion.qmd >}}

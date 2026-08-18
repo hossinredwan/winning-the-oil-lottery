@@ -56,6 +56,10 @@ venv/
 # Raw downloaded data
 data/raw/*
 
+data/intermediate/*
+
+data/processed/*
+
 # External datasets (authors, agencies)
 data/external/*
 

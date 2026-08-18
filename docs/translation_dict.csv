@@ -1,0 +1,19 @@
+﻿required_item,available_in_well_table,source_column,english_name,coverage,notes
+Well identifier,Yes,CADASTRO,well_id,Direct,Unique and permanent ANP well identifier.
+Well name,Yes,POCO,well_name,Direct,Official ANP well name.
+Latitude,Yes,LATITUDE_BASE_DD,latitude,Direct,Decimal-degree latitude. DMS version also exists as LATITUDE_BASE_4C.
+Longitude,Yes,LONGITUDE_BASE_DD,longitude,Direct,Decimal-degree longitude. DMS version also exists as LONGITUDE_BASE_4C.
+State,Yes,ESTADO,state_code,Direct,Brazilian state abbreviation where drilling began.
+Sedimentary basin,Yes,BACIA,sedimentary_basin,Direct,Name of the sedimentary basin.
+Onshore/offshore indicator,Yes,TERRA_MAR,onshore_offshore,Direct,T = onshore (Terra); M = offshore (Mar).
+Drilling start date,Yes,INICIO,drilling_start_date,Direct,Date when drilling effectively started.
+Drilling completion date,Yes,TERMINO,drilling_end_date,Direct,Date final drilling depth was reached.
+Well conclusion date,Yes,CONCLUSAO,well_conclusion_date,Direct,Date well-related drilling activities were concluded.
+Well result,Partial,RECLASSIFICACAO; SITUACAO,well_result,Derived / requires validation,"No single explicit RESULTADO column appears in this metadata. Reclassification and current status may help, but a separate well-results classification may be needed."
+Discovery category,Partial,RECLASSIFICACAO,discovery_category,Derived / requires codebook,"May identify commercial oil/gas producers or discoveries, but categories must be inspected in the actual data and validated against ANP definitions."
+Dry-hole category,Partial,RECLASSIFICACAO; SITUACAO,dry_hole_category,Derived / requires codebook,Dry-hole status is not documented as a dedicated column. It may appear among reclassification or status values; confirm from distinct values or another ANP results dataset.
+Producer status,Partial,RECLASSIFICACAO; SITUACAO,producer_status,Derived / requires codebook,"Example reclassification includes 'PRODUTOR COMERCIAL DE PETRÓLEO', but producer status is not a dedicated binary field."
+Field name,Yes,CAMPO,field_name,Direct,"Production field name, when applicable."
+Operator,Yes,OPERADOR,operator,Direct,Trade name of the concessionaire/operator.
+Municipality,No,,municipality_code,Spatial join required,Assign using well coordinates and IBGE municipality polygons.
+Minimum Comparable Area (MCA),No,,mca_id,Crosswalk required,Assign after municipality matching using an MCA crosswalk.

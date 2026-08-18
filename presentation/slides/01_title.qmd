@@ -1,0 +1,51 @@
+---
+title: ""
+---
+
+::: {.columns}
+
+::: {.column width="58%"}
+
+<br><br><br>
+
+# **Winning the Oil Lottery**
+
+## The Impact of Natural Resource Extraction on Growth
+
+### *Replication of Cavalcanti, Da Mata & Toscani (2019)*
+
+<br>
+
+**Based on**
+
+Cavalcanti, T., Da Mata, D., & Toscani, F. (2019)
+
+*Journal of Economic Growth, 24, 305–344*
+
+:::
+
+::: {.column width="42%"}
+
+<br><br>
+
+![](../images/brazil_map.png){fig-alt="Brazil map" width="100%"}
+
+:::
+
+:::
+
+<br><br><br>
+
+---
+
+**MD Redwan Hossin**
+
+*M.Sc. Applied Economics and Data Science*
+
+Carl von Ossietzky University of Oldenburg
+
+Applied Econometrics Using GIS Techniques
+
+**Supervisor:** Prof. Dr. Erkan Gören
+
+August 2026

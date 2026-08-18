@@ -1,0 +1,14 @@
+"Classification","Category of well","Offshore","Onshore","Total"
+"Exploratory wells","Discovery of new field",130,299,429
+"Exploratory wells","Discovery of new subfield (reservoir)",87,227,314
+"Exploratory wells","Discovery of field extension (step-out)",257,415,672
+"Exploratory wells","Dry Hole",841,2291,3132
+"Development wells","Producer",1367,9126,10493
+"Development wells","Carries oil or gas",6,37,43
+"Development wells","Production not feasible",331,525,856
+"Development wells","Injection of water, steam, or gas",205,796,1001
+"Development wells","Dry Hole",67,911,978
+"Other","Abandoned",421,562,983
+"Other","Special",65,415,480
+"Other","Missing category",22,16,38
+"Other","Other / review",48,139,187

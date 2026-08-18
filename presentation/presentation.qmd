@@ -1,0 +1,54 @@
+---
+title: "Winning the Oil Lottery"
+
+subtitle: "The Impact of Natural Resource Extraction on Growth"
+
+author: "MD Redwan Hossin"
+
+date: today
+
+bibliography: ../report/references.bib
+
+format:
+
+  clean-revealjs:
+
+    self-contained: true
+
+    slide-number: true
+
+    transition: slide
+
+    smaller: true
+
+    preview-links: true
+
+    incremental: false
+
+    footer: "Winning the Oil Lottery — MD Redwan Hossin"
+
+    title-slide-attributes:
+
+      data-background-color: "#ffffff"
+
+      data-background-opacity: "0.30"
+
+execute:
+
+  echo: false
+
+  warning: false
+
+  message: false
+
+---
+
+{{< include slides/01_title.qmd >}}
+
+{{< include slides/02_introduction.qmd >}}
+
+{{< include slides/03_methodology.qmd >}}
+
+{{< include slides/04_results.qmd >}}
+
+{{< include slides/05_conclusion.qmd >}}
