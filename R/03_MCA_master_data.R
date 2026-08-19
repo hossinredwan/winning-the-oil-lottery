@@ -1,32 +1,34 @@
 # ============================================================
-# MCA 1940-2000
-# Step 1: Load and standardize historical municipality maps
+# BUILD MINIMUM COMPARABLE AREAS (MCA), BRAZIL 1940-2000
 # ============================================================
 
 library(sf)
 library(dplyr)
 library(purrr)
-library(stringr)
 library(tidyr)
+library(stringr)
 library(igraph)
 library(readr)
+library(tibble)
+library(ggplot2)
 
-# Use planar GEOS operations because the analysis uses a projected CRS.
 sf_use_s2(FALSE)
 
-# EPSG:5880 (SIRGAS 2000 / Brazil Polyconic) provides one common projected
-# coordinate system for comparing boundaries and calculating areas in Brazil.
 crs_work <- 5880
 
-out_dir <- "data/processed"
-dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+out_dir <- "data/processed/mca"
+
+dir.create(
+  out_dir,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
 
 
 # ============================================================
-# 1. Locate and check the historical boundary files
+# 1. Historical municipality files
 # ============================================================
 
-# Names store census years; values store the corresponding GeoPackage paths.
 boundary_files <- c(
   `1940` = "data/raw/geobr_municipalities_data/municipalities_1940.gpkg",
   `1950` = "data/raw/geobr_municipalities_data/municipalities_1950.gpkg",
@@ -37,154 +39,312 @@ boundary_files <- c(
   `2000` = "data/raw/geobr_municipalities_data/municipalities_2000.gpkg"
 )
 
-# Verify all inputs before beginning spatial processing.
+
 file_check <- tibble(
   year = names(boundary_files),
-  path = boundary_files,
+  path = unname(boundary_files),
   exists = file.exists(boundary_files)
 )
 
 print(file_check)
 
-# Stop early and list any files that could not be found.
 if (any(!file_check$exists)) {
   stop(
-    "Missing municipality files: ",
-    paste(file_check$path[!file_check$exists], collapse = ", ")
+    "Missing files:\n",
+    paste(
+      file_check$path[!file_check$exists],
+      collapse = "\n"
+    )
   )
 }
 
 
 # ============================================================
-# 2. Read and standardize one census-year map
+# 2. Read and standardize municipality maps
 # ============================================================
 
-# Returns an sf object with valid geometry, a common CRS, and common fields.
 read_municipality_map <- function(path, year) {
+
   message("Reading municipalities: ", year)
 
-  # Read quietly, repair invalid polygons, remove empty features, and transform
-  # the map to the working CRS.
-  x <- st_read(path, quiet = TRUE)
-  x <- st_make_valid(x)
-  x <- x[!st_is_empty(x), ]
-  x <- st_transform(x, crs = crs_work)
+  x <- sf::st_read(
+    path,
+    quiet = TRUE
+  )
 
-  # Municipality code and name are required for all subsequent matching.
-  required_cols <- c("code_muni", "name_muni")
-  missing_cols <- setdiff(required_cols, names(x))
+  x <- sf::st_make_valid(x)
+
+  x <- x[
+    !sf::st_is_empty(x),
+  ]
+
+  x <- sf::st_transform(
+    x,
+    crs = crs_work
+  )
+
+  required_cols <- c(
+    "code_muni",
+    "name_muni"
+  )
+
+  missing_cols <- setdiff(
+    required_cols,
+    names(x)
+  )
 
   if (length(missing_cols) > 0) {
     stop(
       paste0(
-        "Missing columns in ", year, ": ",
-        paste(missing_cols, collapse = ", "),
-        "\nAvailable columns are:\n",
-        paste(names(x), collapse = ", ")
+        "Missing columns in ",
+        year,
+        ": ",
+        paste(
+          missing_cols,
+          collapse = ", "
+        )
       )
     )
   }
 
-  # Municipality codes begin with Brazil's two-digit state code. Derive it
-  # only for historical files that do not already provide code_state.
   if (!"code_state" %in% names(x)) {
     x <- x |>
-      mutate(code_state = substr(as.character(code_muni), 1, 2))
+      dplyr::mutate(
+        code_state = substr(
+          as.character(code_muni),
+          1,
+          2
+        )
+      )
   }
 
-  # Harmonize field types and create an ID unique across years. select.sf()
-  # retains the active spatial column automatically, regardless of its name.
-  x |>
-    mutate(
+  x <- x |>
+    dplyr::mutate(
       year = as.integer(year),
       code_muni = as.character(code_muni),
       name_muni = as.character(name_muni),
       code_state = as.character(code_state),
-      node_id = paste0(year, "_", code_muni)
+      node_id = paste0(
+        year,
+        "_",
+        code_muni
+      )
     ) |>
-    select(
+    dplyr::select(
       year,
       code_muni,
       name_muni,
       code_state,
       node_id
     )
+
+  return(x)
 }
 
+
 # ============================================================
-# 3. Load and combine all census years
+# 3. Read all maps
 # ============================================================
 
-# A named list is retained so individual years remain easy to access, e.g.
-# municipality_maps[["1940"]]. imap() passes each file path and its name/year.
-municipality_maps <- imap(
+municipality_maps <- purrr::imap(
   boundary_files,
-  read_municipality_map
+  ~ read_municipality_map(
+    path = .x,
+    year = .y
+  )
 )
 
-# Master sf dataset: one row per municipality-year observation.
-x <- bind_rows(municipality_maps)
+years <- sort(
+  as.integer(
+    names(municipality_maps)
+  )
+)
 
-# Print a compact summary as a final verification.
-print(x)
 
-# ===============================================================
-# 4. Function to create genealogy links 
-# ===============================================================
+# ============================================================
+# 4. Municipality count diagnostics
+# ============================================================
 
-create_links <- function(old_sf,
-                         new_sf,
-                         old_year,
-                         new_year,
-                         min_share = 0.05) {
+municipality_counts <- purrr::imap_dfr(
+  municipality_maps,
+  function(x, year_name) {
+
+    tibble(
+      year = as.integer(year_name),
+      n_rows = nrow(x),
+      n_codes = dplyr::n_distinct(x$code_muni),
+      duplicate_codes =
+        nrow(x) -
+        dplyr::n_distinct(x$code_muni)
+    )
+  }
+)
+
+print(municipality_counts)
+
+readr::write_csv(
+  municipality_counts,
+  file.path(
+    out_dir,
+    "municipality_counts_by_year.csv"
+  )
+)
+
+if (any(municipality_counts$duplicate_codes > 0)) {
+  warning(
+    "Some historical maps contain duplicate municipality codes."
+  )
+}
+
+
+# ============================================================
+# 5. Historically valid state/territory transitions
+# ============================================================
+
+allowed_state_changes <- tibble::tribble(
+  ~old_state, ~new_state,
+
+  # Rondônia
+  "13", "11",
+  "51", "11",
+
+  # Roraima
+  "13", "14",
+
+  # Amapá
+  "15", "16",
+
+  # Brasília / Distrito Federal
+  "52", "53",
+
+  # Distrito Federal -> Guanabara
+  "30", "34",
+
+  # Guanabara -> Rio de Janeiro
+  "34", "33",
+
+  # Mato Grosso -> Mato Grosso do Sul
+  "51", "50",
+
+  # Goiás -> Tocantins
+  "52", "17",
+
+  # MG/ES disputed territory
+  "99", "31",
+  "99", "32",
+  "31", "99",
+  "32", "99"
+)
+
+
+valid_state_transition <- function(old_state, new_state) {
+
+  old_state <- as.character(old_state)
+  new_state <- as.character(new_state)
+
+  same_state <- old_state == new_state
+
+  transition_key <- paste(
+    old_state,
+    new_state,
+    sep = "_"
+  )
+
+  allowed_keys <- paste(
+    allowed_state_changes$old_state,
+    allowed_state_changes$new_state,
+    sep = "_"
+  )
+
+  same_state |
+    transition_key %in% allowed_keys
+}
+
+
+# ============================================================
+# 6. Create genealogy links
+# ============================================================
+
+create_links <- function(
+    old_sf,
+    new_sf,
+    old_year,
+    new_year,
+    additional_parent_share = 0.20,
+    dominant_min_share = 0.50,
+    sliver_share = 0.005
+) {
 
   message(
-    "Matching ",
+    "\nMatching ",
     old_year,
     " -> ",
     new_year
   )
 
-  # Keep minimal attributes
   old <- old_sf |>
-    select(
+    dplyr::select(
       old_node = node_id,
       old_code = code_muni,
-      old_name = name_muni
+      old_name = name_muni,
+      old_state = code_state
     )
 
   new <- new_sf |>
-    select(
+    dplyr::select(
       new_node = node_id,
       new_code = code_muni,
-      new_name = name_muni
+      new_name = name_muni,
+      new_state = code_state
     )
 
-  # Candidate spatial intersections
-  idx <- st_intersects(old, new)
+  old_area <- as.numeric(
+    sf::st_area(old)
+  )
+
+  new_area <- as.numeric(
+    sf::st_area(new)
+  )
+
+  idx <- sf::st_intersects(
+    old,
+    new
+  )
 
   candidate_pairs <- tibble(
-    old_row = rep(seq_along(idx), lengths(idx)),
-    new_row = unlist(idx)
+    old_row = rep(
+      seq_along(idx),
+      lengths(idx)
+    ),
+    new_row = unlist(
+      idx,
+      use.names = FALSE
+    )
   )
 
   if (nrow(candidate_pairs) == 0) {
-    return(tibble())
+    stop(
+      "No intersections for ",
+      old_year,
+      " -> ",
+      new_year
+    )
   }
 
-  old_area <- as.numeric(st_area(old))
-  new_area <- as.numeric(st_area(new))
-
-  # Calculate actual overlap
-  overlaps <- map2_dfr(
+  overlaps <- purrr::map2_dfr(
     candidate_pairs$old_row,
     candidate_pairs$new_row,
+
     function(i, j) {
 
       inter <- suppressWarnings(
-        st_intersection(
-          st_geometry(old[i, ]),
-          st_geometry(new[j, ])
+        sf::st_intersection(
+          sf::st_geometry(
+            old[i, ]
+          ),
+          sf::st_geometry(
+            new[j, ]
+          )
         )
       )
 
@@ -192,40 +352,145 @@ create_links <- function(old_sf,
         return(NULL)
       }
 
-      a <- sum(as.numeric(st_area(inter)))
+      overlap_area <- sum(
+        as.numeric(
+          sf::st_area(inter)
+        ),
+        na.rm = TRUE
+      )
+
+      if (
+        !is.finite(overlap_area) ||
+        overlap_area <= 0
+      ) {
+        return(NULL)
+      }
 
       tibble(
         old_row = i,
         new_row = j,
-        overlap_area = a,
-        share_old = a / old_area[i],
-        share_new = a / new_area[j]
+        overlap_area = overlap_area,
+        share_old = overlap_area / old_area[i],
+        share_new = overlap_area / new_area[j]
       )
     }
   )
 
-  # Candidate polygons can touch only at their boundaries, producing no
-  # area-bearing intersections. Return an empty result in that case.
   if (nrow(overlaps) == 0) {
-    return(tibble())
+    stop(
+      "No positive-area overlaps for ",
+      old_year,
+      " -> ",
+      new_year
+    )
   }
 
-  links <- overlaps |>
-    filter(
-      share_old >= min_share |
-      share_new >= min_share
-    ) |>
-    mutate(
-      old_year = old_year,
-      new_year = new_year,
+  overlaps <- overlaps |>
+    dplyr::mutate(
       old_node = old$old_node[old_row],
       new_node = new$new_node[new_row],
       old_code = old$old_code[old_row],
       new_code = new$new_code[new_row],
       old_name = old$old_name[old_row],
-      new_name = new$new_name[new_row]
+      new_name = new$new_name[new_row],
+      old_state = old$old_state[old_row],
+      new_state = new$new_state[new_row],
+      old_year = as.integer(old_year),
+      new_year = as.integer(new_year)
+    )
+
+  overlaps <- overlaps |>
+    dplyr::filter(
+      share_new >= sliver_share |
+        share_old >= sliver_share
+    )
+
+  overlaps <- overlaps |>
+    dplyr::mutate(
+      state_transition_ok =
+        valid_state_transition(
+          old_state,
+          new_state
+        )
     ) |>
-    select(
+    dplyr::filter(
+      state_transition_ok
+    )
+
+  if (nrow(overlaps) == 0) {
+    stop(
+      "No valid overlaps after state filter for ",
+      old_year,
+      " -> ",
+      new_year
+    )
+  }
+
+  overlaps <- overlaps |>
+    dplyr::group_by(
+      new_node
+    ) |>
+    dplyr::arrange(
+      dplyr::desc(share_new),
+      dplyr::desc(overlap_area),
+      .by_group = TRUE
+    ) |>
+    dplyr::mutate(
+      parent_rank = dplyr::row_number(),
+      dominant_share = dplyr::first(share_new)
+    ) |>
+    dplyr::ungroup()
+
+  links <- overlaps |>
+    dplyr::filter(
+      (
+        parent_rank == 1 &
+          dominant_share >= dominant_min_share
+      ) |
+        (
+          parent_rank > 1 &
+            share_new >= additional_parent_share
+        )
+    )
+
+  low_dominant <- overlaps |>
+    dplyr::filter(
+      parent_rank == 1,
+      dominant_share < dominant_min_share
+    )
+
+  if (nrow(low_dominant) > 0) {
+
+    message(
+      "   Dominant-parent share < ",
+      dominant_min_share,
+      ": ",
+      nrow(low_dominant)
+    )
+
+    links <- dplyr::bind_rows(
+      links,
+      low_dominant
+    ) |>
+      dplyr::distinct(
+        old_node,
+        new_node,
+        .keep_all = TRUE
+      )
+  }
+
+  message(
+    "   Valid candidate overlaps: ",
+    nrow(overlaps)
+  )
+
+  message(
+    "   Retained genealogy edges: ",
+    nrow(links)
+  )
+
+  links |>
+    dplyr::select(
       old_year,
       new_year,
       old_node,
@@ -234,381 +499,735 @@ create_links <- function(old_sf,
       new_code,
       old_name,
       new_name,
+      old_state,
+      new_state,
       overlap_area,
       share_old,
-      share_new
+      share_new,
+      parent_rank,
+      dominant_share
     )
-
-  links
 }
 
-# Names that begin with a number must be accessed with [[ ]] (or backticks).
 
+# ============================================================
+# 7. Build all historical transitions
+# ============================================================
 
-years <- as.integer(names(municipality_maps))
-
-all_links <- map_dfr(
-  seq_len(length(years) - 1),
+all_links <- purrr::map_dfr(
+  seq_len(
+    length(years) - 1
+  ),
   function(i) {
+
     create_links(
-      old_sf = municipality_maps[[i]],
-      new_sf = municipality_maps[[i + 1]],
-      old_year = years[i],
-      new_year = years[i + 1],
-      min_share = 0.05
+      old_sf = municipality_maps[[
+        as.character(years[i])
+      ]],
+      new_sf = municipality_maps[[
+        as.character(years[i + 1])
+      ]],
+      old_year =
+        years[i],
+      new_year =
+        years[i + 1],
+      additional_parent_share = 0.20,
+      dominant_min_share = 0.50,
+      sliver_share = 0.005
     )
   }
 )
 
-# Save the genealogy table in the project's processed-data directory.
-# recursive = TRUE creates parent directories if they do not yet exist.
-
-write_csv(
+readr::write_csv(
   all_links,
-  file.path(out_dir, "municipality_genealogy_spatial.csv")
+  file.path(
+    out_dir,
+    "municipality_genealogy_spatial_corrected.csv"
+  )
 )
 
 
-========================================
-# creating MCA graph approach 
-========================================
-========================================
-all_links <- read_csv(
-  "data/processed/municipality_genealogy_spatial.csv",
-  show_col_types = FALSE
+# ============================================================
+# 8. Transition diagnostics
+# ============================================================
+
+transition_diagnostics <- all_links |>
+  dplyr::group_by(
+    old_year,
+    new_year
+  ) |>
+  dplyr::summarise(
+    n_edges = dplyr::n(),
+    median_share_new =
+      median(
+        share_new,
+        na.rm = TRUE
+      ),
+    mean_share_new =
+      mean(
+        share_new,
+        na.rm = TRUE
+      ),
+    min_share_new =
+      min(
+        share_new,
+        na.rm = TRUE
+      ),
+    median_share_old =
+      median(
+        share_old,
+        na.rm = TRUE
+      ),
+    .groups = "drop"
+  )
+
+print(
+  transition_diagnostics
 )
-=======================================
+
+readr::write_csv(
+  transition_diagnostics,
+  file.path(
+    out_dir,
+    "transition_diagnostics.csv"
+  )
+)
+
+
+# ============================================================
+# 9. Parent diagnostics
+# ============================================================
+
+parent_counts <- all_links |>
+  dplyr::count(
+    new_year,
+    new_node,
+    name = "n_parents"
+  )
+
+print(
+  parent_counts |>
+    dplyr::count(
+      new_year,
+      n_parents
+    )
+)
+
+multiple_parent_cases <- parent_counts |>
+  dplyr::filter(
+    n_parents > 2
+  )
+
+readr::write_csv(
+  multiple_parent_cases,
+  file.path(
+    out_dir,
+    "multiple_parent_cases.csv"
+  )
+)
+
+
+# ============================================================
+# 10. Create graph
+# ============================================================
+
 edges <- all_links |>
-  select(
+  dplyr::transmute(
     from = old_node,
     to = new_node
   ) |>
-  distinct()
+  dplyr::distinct()
 
-all_nodes <- map_dfr(
+all_nodes <- purrr::map_dfr(
   municipality_maps,
-  ~ st_drop_geometry(.x) |>
-    select(
-      node_id,
-      year,
-      code_muni,
-      name_muni,
-      code_state
-    )
-) |>
-  distinct(node_id, .keep_all = TRUE)
+  function(z) {
 
-g <- graph_from_data_frame(
+    z |>
+      sf::st_drop_geometry() |>
+      dplyr::select(
+        node_id,
+        year,
+        code_muni,
+        name_muni,
+        code_state
+      )
+  }
+) |>
+  dplyr::distinct(
+    node_id,
+    .keep_all = TRUE
+  )
+
+g <- igraph::graph_from_data_frame(
   d = edges,
   vertices = all_nodes,
   directed = FALSE
 )
-comp <- components(g)
 
-# Create_crosswalk 
+comp <- igraph::components(g)
+
+
+# ============================================================
+# 11. Node → graph component
+# ============================================================
 
 node_crosswalk <- tibble(
-  node_id = names(comp$membership),
-  component = as.integer(comp$membership)
+  node_id =
+    names(
+      comp$membership
+    ),
+  component =
+    as.integer(
+      comp$membership
+    )
 ) |>
-  left_join(
+  dplyr::left_join(
     all_nodes,
     by = "node_id"
   )
 
-# Restrict MCA IDs to units representation in 1940
 
-mca_components <- node_crosswalk |>
-  group_by(component) |>
-  summarise(
-    contains_1940 = any(year == 1940),
-    .groups = "drop"
+# ============================================================
+# 12. Identify components connected to 1940
+# ============================================================
+
+component_summary <- node_crosswalk |>
+  dplyr::group_by(
+    component
   ) |>
-  filter(contains_1940)
+  dplyr::summarise(
+    contains_1940 =
+      any(year == 1940),
+    contains_2000 =
+      any(year == 2000),
+    first_year =
+      min(year),
+    last_year =
+      max(year),
+    n_nodes =
+      dplyr::n(),
+    .groups = "drop"
+  )
 
-node_crosswalk <- node_crosswalk |>
-  semi_join(
+print(
+  component_summary |>
+    dplyr::count(
+      contains_1940,
+      contains_2000
+    )
+)
+
+mca_components <- component_summary |>
+  dplyr::filter(
+    contains_1940
+  )
+
+node_crosswalk_mca <- node_crosswalk |>
+  dplyr::semi_join(
     mca_components,
     by = "component"
   )
 
 
-mca_ids <- node_crosswalk |>
-  filter(year == 1940) |>
-  arrange(code_state, code_muni) |>
-  distinct(component) |>
-  mutate(
-    mca_id = sprintf(
-      "MCA_%04d",
-      row_number()
-    )
+# ============================================================
+# 13. Assign MCA IDs
+# ============================================================
+
+mca_ids <- node_crosswalk_mca |>
+  dplyr::filter(
+    year == 1940
+  ) |>
+  dplyr::arrange(
+    code_state,
+    code_muni
+  ) |>
+  dplyr::distinct(
+    component
+  ) |>
+  dplyr::mutate(
+    mca_id =
+      sprintf(
+        "MCA_%04d",
+        dplyr::row_number()
+      )
   )
 
-node_crosswalk <- node_crosswalk |>
-  left_join(
+node_crosswalk_mca <- node_crosswalk_mca |>
+  dplyr::left_join(
     mca_ids,
     by = "component"
   )
 
-n_mca <- node_crosswalk |>
-  distinct(mca_id) |>
-  filter(!is.na(mca_id)) |>
+
+# ============================================================
+# 14. MCA count
+# ============================================================
+
+n_mca <- node_crosswalk_mca |>
+  dplyr::distinct(
+    mca_id
+  ) |>
+  dplyr::filter(
+    !is.na(mca_id)
+  ) |>
   nrow()
 
-n_mca
+cat(
+  "\n====================================\n"
+)
+
+cat(
+  "Candidate MCA count: ",
+  n_mca,
+  "\n",
+  sep = ""
+)
+
+cat(
+  "Cavalcanti benchmark: 1275\n"
+)
+
+cat(
+  "Difference from target: ",
+  n_mca - 1275,
+  "\n",
+  sep = ""
+)
+
+cat(
+  "====================================\n"
+)
 
 
-# Create the crucial 2000 municipality --> MCA crosswalk 
+# ============================================================
+# 15. Cross-state component diagnostics
+# ============================================================
 
-crosswalk_2000 <- node_crosswalk |>
-  filter(year == 2000) |>
-  select(
+cross_state_components <- node_crosswalk_mca |>
+  dplyr::filter(
+    year == 2000
+  ) |>
+  dplyr::group_by(
+    mca_id
+  ) |>
+  dplyr::summarise(
+    n_states =
+      dplyr::n_distinct(
+        code_state
+      ),
+    states =
+      paste(
+        sort(
+          unique(
+            code_state
+          )
+        ),
+        collapse = ", "
+      ),
+    n_municipalities =
+      dplyr::n(),
+    .groups = "drop"
+  ) |>
+  dplyr::filter(
+    n_states > 1
+  ) |>
+  dplyr::arrange(
+    dplyr::desc(n_states),
+    dplyr::desc(n_municipalities)
+  )
+
+print(
+  cross_state_components,
+  n = Inf
+)
+
+readr::write_csv(
+  cross_state_components,
+  file.path(
+    out_dir,
+    "cross_state_components_corrected.csv"
+  )
+)
+
+
+# ============================================================
+# 16. Forbidden cross-state edges
+# ============================================================
+
+forbidden_cross_state_edges <- all_links |>
+  dplyr::filter(
+    old_state != new_state
+  ) |>
+  dplyr::mutate(
+    transition_valid =
+      valid_state_transition(
+        old_state,
+        new_state
+      )
+  ) |>
+  dplyr::filter(
+    !transition_valid
+  )
+
+cat(
+  "\nForbidden cross-state edges remaining: ",
+  nrow(
+    forbidden_cross_state_edges
+  ),
+  "\n",
+  sep = ""
+)
+
+
+# ============================================================
+# 17. 2000 municipality → MCA crosswalk
+# ============================================================
+
+crosswalk_2000 <- node_crosswalk_mca |>
+  dplyr::filter(
+    year == 2000
+  ) |>
+  dplyr::select(
     code_muni,
     name_muni,
     code_state,
     mca_id,
     component
   ) |>
-  arrange(mca_id, code_muni)
+  dplyr::filter(
+    !is.na(mca_id)
+  ) |>
+  dplyr::arrange(
+    mca_id,
+    code_muni
+  )
 
-nrow(crosswalk_2000)
-
-n_distinct(crosswalk_2000$mca_id)
-
-write_csv(
-  crosswalk_2000,
-  file.path(out_dir, "municipality_2000_to_mca_1940_2000.csv")
+cat(
+  "\n2000 municipalities mapped: ",
+  nrow(crosswalk_2000),
+  "\n",
+  sep = ""
 )
 
-# Create the full historical crosswalk
+cat(
+  "Unique candidate MCAs: ",
+  dplyr::n_distinct(
+    crosswalk_2000$mca_id
+  ),
+  "\n",
+  sep = ""
+)
 
-crosswalk_all_years <- node_crosswalk |>
-  select(
+readr::write_csv(
+  crosswalk_2000,
+  file.path(
+    out_dir,
+    "municipality_2000_to_mca_1940_2000.csv"
+  )
+)
+
+
+# ============================================================
+# 18. Complete historical crosswalk
+# ============================================================
+
+crosswalk_all_years <- node_crosswalk_mca |>
+  dplyr::filter(
+    !is.na(mca_id)
+  ) |>
+  dplyr::select(
     year,
     code_muni,
     name_muni,
     code_state,
-    mca_id
+    mca_id,
+    component
   ) |>
-  arrange(
+  dplyr::arrange(
     mca_id,
     year,
     code_muni
   )
 
-write_csv(
+readr::write_csv(
   crosswalk_all_years,
-  file.path(out_dir, "municipality_to_mca_1940_2000.csv")
+  file.path(
+    out_dir,
+    "municipality_to_mca_1940_2000.csv"
+  )
 )
 
-# Build the MCA polygons 
+
+# ============================================================
+# 19. Identify unmatched 2000 municipalities
+# ============================================================
 
 muni_2000 <- municipality_maps[["2000"]]
 
 muni_2000_mca <- muni_2000 |>
-  left_join(
+  dplyr::left_join(
     crosswalk_2000 |>
-      select(code_muni, mca_id),
+      dplyr::select(
+        code_muni,
+        mca_id
+      ),
     by = "code_muni"
   )
 
-sum(is.na(muni_2000_mca$mca_id))
-
-# get 1 missing mca , find out which one 
-
-muni_2000_mca |>
-  dplyr::filter(is.na(mca_id)) |>
+unmatched_2000 <- muni_2000_mca |>
+  dplyr::filter(
+    is.na(mca_id)
+  ) |>
   sf::st_drop_geometry()
 
-recife_mca <- crosswalk_2000 |>
-  dplyr::filter(
-    code_state == "26",
-    stringr::str_detect(name_muni, stringr::regex("^Recife$", ignore_case = TRUE))
-  ) |>
-  dplyr::pull(mca_id)
+print(
+  unmatched_2000
+)
 
-recife_mca
-
-muni_2000_mca <- muni_2000_mca |>
-  dplyr::mutate(
-    mca_id = dplyr::if_else(
-      code_muni == "2605459",
-      recife_mca,
-      mca_id
-    )
+readr::write_csv(
+  unmatched_2000,
+  file.path(
+    out_dir,
+    "unmatched_2000_municipalities.csv"
   )
+)
 
-sum(is.na(muni_2000_mca$mca_id))
 
-# desolve: 
+# ============================================================
+# 20. Build MCA polygons
+# ============================================================
 
 mca_1940_2000 <- muni_2000_mca |>
-  dplyr::filter(!is.na(mca_id)) |>
-  dplyr::group_by(mca_id) |>
+  dplyr::filter(
+    !is.na(mca_id)
+  ) |>
+  dplyr::group_by(
+    mca_id
+  ) |>
   dplyr::summarise(
     .groups = "drop"
   ) |>
   sf::st_make_valid()
 
-nrow(mca_1940_2000)
+cat(
+  "\nMCA polygon count: ",
+  nrow(mca_1940_2000),
+  "\n",
+  sep = ""
+)
 
-# addiding mca attributes
 
-mca_1940_2000 <- mca_1940_2000 |>
-  dplyr::mutate(
-    area_km2 = as.numeric(sf::st_area(mca_1940_2000)) / 1e6
+# ============================================================
+# 21. MCA geographic attributes
+# ============================================================
+
+mca_1940_2000$area_km2 <-
+  as.numeric(
+    sf::st_area(
+      mca_1940_2000
+    )
+  ) /
+  1e6
+
+mca_points <- suppressWarnings(
+  sf::st_point_on_surface(
+    mca_1940_2000
   )
+)
 
-mca_points <- mca_1940_2000 |>
-  sf::st_point_on_surface()
+xy <- sf::st_coordinates(
+  mca_points
+)
 
-coords <- sf::st_coordinates(mca_points)
+mca_1940_2000$x <- xy[, "X"]
+mca_1940_2000$y <- xy[, "Y"]
 
-mca_1940_2000 <- mca_1940_2000 |>
-  dplyr::mutate(
-    x = coords[, "X"],
-    y = coords[, "Y"]
-  )
+mca_points_ll <- sf::st_transform(
+  mca_points,
+  crs = 4326
+)
 
-mca_ll <- mca_points |>
-  st_transform(4326)
+ll <- sf::st_coordinates(
+  mca_points_ll
+)
 
-ll <- st_coordinates(mca_ll)
+mca_1940_2000$longitude <- ll[, "X"]
+mca_1940_2000$latitude <- ll[, "Y"]
 
-mca_1940_2000 <- mca_1940_2000 |>
-  mutate(
-    longitude = ll[, 1],
-    latitude  = ll[, 2]
-  )
 
-st_write(
+# ============================================================
+# 22. Save MCA spatial files
+# ============================================================
+
+gpkg_path <- file.path(
+  out_dir,
+  "mca_1940_2000.gpkg"
+)
+
+rds_path <- file.path(
+  out_dir,
+  "mca_1940_2000.rds"
+)
+
+if (file.exists(gpkg_path)) {
+  file.remove(gpkg_path)
+}
+
+sf::st_write(
   mca_1940_2000,
-  file.path(out_dir, "mca_1940_2000.gpkg"),
-  delete_dsn = TRUE,
+  dsn = gpkg_path,
   quiet = TRUE
 )
 
 saveRDS(
   mca_1940_2000,
-  file.path(out_dir, "mca_1940_2000.rds")
+  file = rds_path
 )
 
-# plot
-ggplot2::ggplot(mca_1940_2000) +
-  ggplot2::geom_sf(
-    fill = "white",
-    color = "grey30",
-    linewidth = 0.25
-  ) +
-  ggplot2::theme_void()
 
-# validation using Rondonia test 
+# ============================================================
+# 23. MCA group-size diagnostics
+# ============================================================
 
 mca_size <- crosswalk_2000 |>
-  count(
+  dplyr::count(
     mca_id,
     name = "n_municipalities_2000"
   ) |>
-  arrange(desc(n_municipalities_2000))
+  dplyr::arrange(
+    dplyr::desc(
+      n_municipalities_2000
+    )
+  )
 
-mca_size
+print(
+  mca_size,
+  n = 30
+)
 
-crosswalk_2000 |>
-  count(
+readr::write_csv(
+  mca_size,
+  file.path(
+    out_dir,
+    "mca_size_2000.csv"
+  )
+)
+
+
+# ============================================================
+# 24. State-specific MCA composition
+# ============================================================
+
+mca_state_size <- crosswalk_2000 |>
+  dplyr::count(
     mca_id,
     code_state,
     name = "n_2000_municipalities"
   ) |>
-  arrange(desc(n_2000_municipalities)) |>
-  print(n = 30)
+  dplyr::arrange(
+    dplyr::desc(
+      n_2000_municipalities
+    )
+  )
+
+print(
+  mca_state_size,
+  n = 50
+)
+
+readr::write_csv(
+  mca_state_size,
+  file.path(
+    out_dir,
+    "mca_state_size_2000.csv"
+  )
+)
+
 
 # ============================================================
-# Diagnostic 1: MCAs spanning multiple states
+# 25. Plot candidate MCA geography
 # ============================================================
 
-cross_state_components <- node_crosswalk |>
-  filter(year == 2000) |>
-  group_by(mca_id) |>
-  summarise(
-    n_states = n_distinct(code_state),
-    states = paste(
-      sort(unique(code_state)),
-      collapse = ", "
+mca_plot <- ggplot2::ggplot(
+  mca_1940_2000
+) +
+  ggplot2::geom_sf(
+    fill = "white",
+    color = "grey30",
+    linewidth = 0.15
+  ) +
+  ggplot2::theme_void() +
+  ggplot2::labs(
+    title = paste0(
+      "Candidate Minimum Comparable Areas, 1940-2000 (n = ",
+      nrow(mca_1940_2000),
+      ")"
+    )
+  )
+
+print(
+  mca_plot
+)
+
+
+# ============================================================
+# 26. Final validation report
+# ============================================================
+
+validation_report <- tibble::tibble(
+  measure = c(
+    "1940 municipalities",
+    "2000 municipalities",
+    "2000 municipalities mapped",
+    "Unmatched 2000 municipalities",
+    "Candidate MCAs",
+    "Cavalcanti target MCAs",
+    "Difference from target",
+    "Cross-state candidate MCAs",
+    "Forbidden cross-state edges"
+  ),
+
+  value = c(
+    nrow(
+      municipality_maps[["1940"]]
     ),
-    n_municipalities = n(),
-    .groups = "drop"
-  ) |>
-  filter(n_states > 1) |>
-  arrange(desc(n_states), desc(n_municipalities))
 
-cross_state_components
+    nrow(
+      municipality_maps[["2000"]]
+    ),
 
-nrow(cross_state_components)
+    nrow(
+      crosswalk_2000
+    ),
 
-problem_components <- node_crosswalk |>
-  filter(
-    mca_id %in% cross_state_components$mca_id
-  ) |>
-  select(
-    node_id,
-    component,
-    mca_id,
-    year,
-    code_state,
-    code_muni,
-    name_muni
+    nrow(
+      unmatched_2000
+    ),
+
+    n_mca,
+
+    1275,
+
+    n_mca - 1275,
+
+    nrow(
+      cross_state_components
+    ),
+
+    nrow(
+      forbidden_cross_state_edges
+    )
   )
+)
 
-problem_components
+print(
+  validation_report
+)
 
-node_info <- all_nodes |>
-  select(
-    node_id,
-    year,
-    code_state,
-    code_muni,
-    name_muni
+readr::write_csv(
+  validation_report,
+  file.path(
+    out_dir,
+    "mca_validation_report.csv"
   )
-
-cross_state_edges <- all_links |>
-  left_join(
-    node_info |>
-      rename(
-        old_node = node_id,
-        old_state = code_state,
-        old_muni_name = name_muni
-      ),
-    by = "old_node"
-  ) |>
-  left_join(
-    node_info |>
-      rename(
-        new_node = node_id,
-        new_state = code_state,
-        new_muni_name = name_muni
-      ),
-    by = "new_node"
-  ) |>
-  filter(
-    old_state != new_state
-  ) |>
-  arrange(
-    old_year,
-    new_year,
-    desc(overlap_area)
-  )
-
-cross_state_edges |>
-  select(
-    old_year,
-    new_year,
-    old_state,
-    new_state,
-    old_code,
-    new_code,
-    old_name,
-    new_name,
-    share_old,
-    share_new
-  ) |>
-  print(n = 100)
+)
